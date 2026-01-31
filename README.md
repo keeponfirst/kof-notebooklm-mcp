@@ -2,6 +2,7 @@
 
 [![PyPI version](https://badge.fury.io/py/kof-notebooklm-mcp.svg)](https://badge.fury.io/py/kof-notebooklm-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![中文文檔](https://img.shields.io/badge/文檔-繁體中文-blue)](./README_zh-TW.md)
 
 **MCP Server for Google NotebookLM** — Create notebooks, add sources, and query AI with citations directly from your IDE.
 
