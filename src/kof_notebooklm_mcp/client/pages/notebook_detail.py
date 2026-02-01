@@ -67,10 +67,11 @@ SELECTORS = {
     # 新增來源按鈕
     "add_source_button": [
         'button.add-source-button',  # 當前 UI
+        'button[aria-label="新增來源"]',
+        'button:has-text("新增來源")',
+        'button[aria-label="Add source"]',
+        'button:has-text("Add source")',
         '[data-testid="add-source"]',
-        'button[aria-label*="Add source"]',
-        'button[aria-label*="新增來源"]',
-        'button[aria-label*="Add"]',
         '[class*="add"][class*="source"]',
     ],
     # 新增來源對話框
@@ -93,6 +94,7 @@ SELECTORS = {
     # 文字輸入選項
     "text_option": [
         'button:has(mat-icon:has-text("content_paste"))',  # 當前 UI (複製的文字)
+        'button:has-text("複製的文字")',
         '[data-testid="text-option"]',
         'button:has-text("Copied text")',
         'button:has-text("Paste text")',
@@ -178,10 +180,10 @@ SELECTORS = {
     ],
     # AI 訊息
     "ai_message": [
-        'chat-message:not(:has(.from-user-container))',  # 當前 UI (非使用者訊息即 AI 訊息)
+        '.to-user-container',
+        'chat-message:not(:has(.from-user-container))',
         '[data-testid="ai-message"]',
         '[class*="message"][class*="assistant"]',
-        '[class*="message"][class*="ai"]',
     ],
     # 建議問題
     "suggested_questions": [
@@ -223,6 +225,8 @@ SELECTORS = {
     # 正在輸入/思考指示器
     "typing_indicator": [
         '[data-testid="typing-indicator"]',
+        '*:has-text("Interpreting")',
+        '*:has-text("Thinking")',
         '[class*="typing"]',
         '[class*="thinking"]',
         '[class*="generating"]',
@@ -588,6 +592,15 @@ class NotebookDetailPage(BasePage):
         """
         logger.info("正在尋找並點擊新增來源按鈕...")
 
+        for selector in SELECTORS["add_source_dialog"]:
+            try:
+                dialog = self.page.locator(selector).first
+                if await dialog.is_visible():
+                    logger.info("新增來源對話框已開啟")
+                    return True
+            except Exception:
+                continue
+
         for selector in SELECTORS["add_source_button"]:
             try:
                 button = self.page.locator(selector).first
@@ -781,7 +794,7 @@ class NotebookDetailPage(BasePage):
         """
         logger.info("正在等待來源處理...")
 
-        start_time = self.page.evaluate("Date.now()")
+        start_time = await self.page.evaluate("Date.now()")
 
         while True:
             # 檢查是否有錯誤訊息
@@ -834,7 +847,7 @@ class NotebookDetailPage(BasePage):
 
             # 檢查逾時
             current_time = await self.page.evaluate("Date.now()")
-            if current_time - await start_time > timeout_ms:
+            if current_time - start_time > timeout_ms:
                 logger.warning("等待處理逾時")
                 return "processing"
 
