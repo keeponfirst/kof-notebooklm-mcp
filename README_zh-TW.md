@@ -10,6 +10,14 @@
 
 ---
 
+## ☕ 支持這個專案
+
+如果這個專案對你有幫助，歡迎請我喝杯咖啡：
+
+👉 https://buymeacoffee.com/keeponfirst
+
+---
+
 ## 功能特色
 
 - 🆕 **建立筆記本** — 程式化建立並命名 NotebookLM 筆記本

@@ -10,6 +10,14 @@
 
 ---
 
+## ☕ Support this project
+
+If this project helps you, you can support development here:
+
+👉 https://buymeacoffee.com/keeponfirst
+
+---
+
 ## Features
 
 - 🆕 **Create Notebooks** — Programmatically create and name NotebookLM notebooks
