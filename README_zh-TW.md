@@ -16,6 +16,10 @@
 
 👉 https://buymeacoffee.com/keeponfirst
 
+<a href="https://www.buymeacoffee.com/keeponfirst" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="45" />
+</a>
+
 ---
 
 ## 功能特色
