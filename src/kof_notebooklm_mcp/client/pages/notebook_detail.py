@@ -9,10 +9,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from playwright.async_api import Page, Locator
+from playwright.async_api import Locator, Page
 
-from .base import BasePage
 from ...config import Config
+from .base import BasePage
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ SELECTORS = {
     ],
     # 來源面板
     "sources_panel": [
+        "section.source-panel",  # NotebookLM current source panel
         '[data-testid="sources-panel"]',
         '[aria-label*="Sources"]',
         '[aria-label*="來源"]',
@@ -36,6 +37,7 @@ SELECTORS = {
     ],
     # 單一來源項目
     "source_items": [
+        "div.single-source-container",  # NotebookLM current source row
         '[data-testid="source-item"]',
         '[role="listitem"]',
         '[class*="source-item"]',
@@ -43,6 +45,7 @@ SELECTORS = {
     ],
     # 來源標題
     "source_title": [
+        "div.source-title",  # NotebookLM current source title
         '[data-testid="source-title"]',
         'h3',
         'h4',
@@ -118,7 +121,12 @@ SELECTORS = {
         'textarea[placeholder*="貼上"]',
         'textarea:not([placeholder*="Ask"])',
     ],
-    # 標題輸入欄位 (通常是重新命名時才出現)
+    # 筆記本標題輸入欄位
+    "notebook_title_input": [
+        "input.title-input",  # NotebookLM current notebook title field
+        '[data-testid="notebook-title-input"]',
+    ],
+    # 來源標題輸入欄位（貼上文字來源的對話框可能顯示）
     "title_input": [
         '[data-testid="title-input"]',
         'input[placeholder*="Title"]',
@@ -127,6 +135,10 @@ SELECTORS = {
     ],
     # 提交/插入按鈕
     "submit_button": [
+        'mat-dialog-container button:has-text("插入")',  # NotebookLM current copied-text dialog
+        'mat-dialog-container button:has-text("Insert")',
+        '[role="dialog"] button:has-text("插入")',
+        '[role="dialog"] button:has-text("Insert")',
         '[data-testid="submit-source"]',
         'button[type="submit"]',
         'button:has-text("Insert")',
@@ -178,20 +190,6 @@ SELECTORS = {
         'button[aria-label*="Submit"]',
         'button:has(mat-icon:has-text("arrow_forward"))',
     ],
-    # AI 訊息
-    "ai_message": [
-        '.to-user-container',
-        'chat-message:not(:has(.from-user-container))',
-        '[data-testid="ai-message"]',
-        '[class*="message"][class*="assistant"]',
-    ],
-    # 建議問題
-    "suggested_questions": [
-        'chip-list button',  # 當前 UI (通常是 chip 按鈕)
-        '[data-testid="suggested-questions"]',
-        '[class*="suggested"]',
-        '[class*="follow-up"]',
-    ],
     # AI 回應容器 (備用)
     "response_container": [
         '.chat-message-pair',  # 當前 UI
@@ -216,11 +214,25 @@ SELECTORS = {
     ],
     # 引用詳細資訊（懸停或點擊後顯示）
     "citation_detail": [
+        '.citation-tooltip-panel',  # 當前 UI
+        '.citation-tooltip',
         '[data-testid="citation-detail"]',
         '[class*="citation"][class*="popup"]',
         '[class*="citation"][class*="tooltip"]',
         '[class*="reference"][class*="detail"]',
         '[role="tooltip"]',
+    ],
+    # 引用詳細資訊中的來源標題
+    "citation_title": [
+        '.citation-tooltip-header',  # 當前 UI
+        '[data-testid="citation-title"]',
+        '[class*="citation"][class*="title"]',
+    ],
+    # 引用詳細資訊中的原文摘錄
+    "citation_excerpt": [
+        '.citation-tooltip-content',  # 當前 UI
+        '[data-testid="citation-excerpt"]',
+        '[class*="citation"][class*="content"]',
     ],
     # 正在輸入/思考指示器
     "typing_indicator": [
@@ -258,6 +270,10 @@ SELECTORS = {
     ],
     # AI 訊息
     "ai_message": [
+        'mat-card-content.to-user-message-inner-content',  # 當前 UI
+        '.to-user-message-inner-content',
+        '.to-user-container',
+        'chat-message:not(:has(.from-user-container))',
         '[data-testid="ai-message"]',
         '[class*="message"][class*="assistant"]',
         '[class*="message"][class*="ai"]',
@@ -266,6 +282,7 @@ SELECTORS = {
     ],
     # 建議問題
     "suggested_questions": [
+        'chip-list button',  # 當前 UI (通常是 chip 按鈕)
         '[data-testid="suggested-questions"]',
         '[class*="suggested"]',
         '[class*="follow-up"]',
@@ -348,6 +365,16 @@ class NotebookDetailPage(BasePage):
 
     async def _get_notebook_title(self) -> str:
         """取得筆記本標題。"""
+        for selector in SELECTORS["notebook_title_input"]:
+            try:
+                elem = self.page.locator(selector).first
+                if await elem.is_visible():
+                    value = await elem.input_value()
+                    if value.strip():
+                        return value.strip()
+            except Exception:
+                continue
+
         for selector in SELECTORS["notebook_title"]:
             try:
                 elem = self.page.locator(selector).first
@@ -399,12 +426,13 @@ class NotebookDetailPage(BasePage):
 
         # 嘗試從連結取得
         try:
-            link = item.locator("a").first
-            href = await self.safe_get_attribute(link, "href")
-            if href:
-                match = re.search(r"source[=/]([^/?&]+)", href)
-                if match:
-                    return match.group(1)
+            links = item.locator("a")
+            if await links.count() > 0:
+                href = await self.safe_get_attribute(links.first, "href")
+                if href:
+                    match = re.search(r"source[=/]([^/?&]+)", href)
+                    if match:
+                        return match.group(1)
         except Exception:
             pass
 
@@ -425,7 +453,7 @@ class NotebookDetailPage(BasePage):
         # 備用：使用項目的第一行文字
         full_text = await self.safe_get_text(item)
         if full_text:
-            lines = [l.strip() for l in full_text.split("\n") if l.strip()]
+            lines = [line.strip() for line in full_text.split("\n") if line.strip()]
             if lines:
                 return lines[0]
 
@@ -452,7 +480,7 @@ class NotebookDetailPage(BasePage):
             return "audio"
         if any(x in text for x in ["http://", "https://", "www."]):
             return "url"
-        if any(x in text for x in ["pasted text", "貼上文字", "text"]):
+        if any(x in text for x in ["pasted text", "貼上文字", "text", "markdown"]):
             return "text"
 
         # 嘗試從 data 屬性取得類型
@@ -910,7 +938,13 @@ class NotebookDetailPage(BasePage):
             "source_id": None,  # NotebookLM 不一定會顯示 ID
             "title": title,
             "processing_status": status,
-            "message": "來源已新增" if status == "complete" else "來源正在處理中" if status == "processing" else "新增來源失敗",
+            "message": (
+                "來源已新增"
+                if status == "complete"
+                else "來源正在處理中"
+                if status == "processing"
+                else "新增來源失敗"
+            ),
         }
 
     async def add_text_source(
@@ -980,7 +1014,13 @@ class NotebookDetailPage(BasePage):
             "source_id": None,
             "title": final_title,
             "processing_status": status,
-            "message": "來源已新增" if status == "complete" else "來源正在處理中" if status == "processing" else "新增來源失敗",
+            "message": (
+                "來源已新增"
+                if status == "complete"
+                else "來源正在處理中"
+                if status == "processing"
+                else "新增來源失敗"
+            ),
         }
 
     # ===== 查詢/Ask 相關方法 =====
@@ -1033,7 +1073,7 @@ class NotebookDetailPage(BasePage):
         Returns:
             是否成功輸入
         """
-        logger.info(f"正在輸入問題: {question[:50]}...")
+        logger.info("正在輸入問題 (question_length=%d)", len(question))
 
         input_elem = await self._find_chat_input()
         if not input_elem:
@@ -1081,12 +1121,39 @@ class NotebookDetailPage(BasePage):
         logger.warning("無法提交問題")
         return False
 
-    async def _wait_for_response(self, timeout_ms: int = 90000) -> dict[str, Any] | None:
+    async def _count_ai_messages(self) -> int:
+        """計算目前 AI 回覆數量，優先使用第一個能命中的選擇器。"""
+        for selector in SELECTORS["ai_message"]:
+            try:
+                count = await self.page.locator(selector).count()
+                if count > 0:
+                    return count
+            except Exception:
+                continue
+        return 0
+
+    async def _get_latest_ai_answer_text(self) -> str:
+        """取得目前最後一則 AI 回覆文字，供串流完成判斷。"""
+        for selector in SELECTORS["ai_message"]:
+            try:
+                messages = self.page.locator(selector)
+                if await messages.count() > 0:
+                    return await self._extract_answer_text(messages.last)
+            except Exception:
+                continue
+        return ""
+
+    async def _wait_for_response(
+        self,
+        timeout_ms: int = 90000,
+        initial_ai_message_count: int = 0,
+    ) -> dict[str, Any] | None:
         """
         等待 AI 回應完成。
 
         Args:
             timeout_ms: 逾時時間（毫秒）
+            initial_ai_message_count: 送出問題前已有的 AI 回覆數量
 
         Returns:
             回應資訊字典，包含 answer 和 citations
@@ -1109,17 +1176,11 @@ class NotebookDetailPage(BasePage):
                 except Exception:
                     pass
 
-            # 檢查是否有新的 AI 訊息
-            for selector in SELECTORS["ai_message"]:
-                try:
-                    messages = self.page.locator(selector)
-                    count = await messages.count()
-                    if count > 0:
-                        response_started = True
-                        logger.debug("偵測到 AI 訊息")
-                        break
-                except Exception:
-                    pass
+            # 檢查是否有新的 AI 訊息。不能只判斷「有訊息」，否則第二次提問
+            # 會立刻把上一則回答誤當成這次的結果。
+            if await self._count_ai_messages() > initial_ai_message_count:
+                response_started = True
+                logger.debug("偵測到新的 AI 訊息")
 
             # 檢查逾時
             current_time = await self.page.evaluate("Date.now()")
@@ -1131,6 +1192,9 @@ class NotebookDetailPage(BasePage):
 
         # 等待回應完成（typing indicator 消失）
         logger.info("AI 正在生成回應，等待完成...")
+
+        last_answer_text = ""
+        stable_answer_checks = 0
 
         while True:
             # 檢查 typing indicator 是否消失
@@ -1159,7 +1223,20 @@ class NotebookDetailPage(BasePage):
                     except Exception:
                         pass
 
-                if not still_typing:
+                has_new_message = await self._count_ai_messages() > initial_ai_message_count
+                current_answer_text = (
+                    await self._get_latest_ai_answer_text() if has_new_message else ""
+                )
+
+                if current_answer_text and current_answer_text == last_answer_text:
+                    stable_answer_checks += 1
+                else:
+                    stable_answer_checks = 0
+                    last_answer_text = current_answer_text
+
+                # 新版 UI 可能沒有可辨識的 typing indicator，因此除了訊息數量，
+                # 還要求回答文字連續三次（約三秒）不再變動，避免截到串流中的半成品。
+                if not still_typing and has_new_message and stable_answer_checks >= 3:
                     logger.info("AI 回應完成")
                     break
 
@@ -1266,6 +1343,7 @@ class NotebookDetailPage(BasePage):
             引用資訊列表
         """
         citations: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
 
         for selector in SELECTORS["citation"]:
             try:
@@ -1276,7 +1354,14 @@ class NotebookDetailPage(BasePage):
                     elem = citation_elems.nth(i)
                     citation_info = await self._extract_single_citation(elem)
                     if citation_info:
-                        citations.append(citation_info)
+                        dedupe_key = (
+                            str(citation_info.get("source_id") or ""),
+                            str(citation_info.get("source_title") or ""),
+                            str(citation_info.get("excerpt") or ""),
+                        )
+                        if dedupe_key not in seen:
+                            citations.append(citation_info)
+                            seen.add(dedupe_key)
 
                 if citations:
                     logger.debug(f"從 {selector} 提取到 {len(citations)} 個引用")
@@ -1315,7 +1400,28 @@ class NotebookDetailPage(BasePage):
                     try:
                         detail = self.page.locator(detail_selector).first
                         if await detail.is_visible(timeout=1000):
-                            excerpt = await self.safe_get_text(detail)
+                            for title_selector in SELECTORS["citation_title"]:
+                                try:
+                                    title_elem = detail.locator(title_selector).first
+                                    title_text = await self.safe_get_text(title_elem)
+                                    if title_text.strip():
+                                        source_title = title_text.strip()
+                                        break
+                                except Exception:
+                                    continue
+
+                            for excerpt_selector in SELECTORS["citation_excerpt"]:
+                                try:
+                                    excerpt_elem = detail.locator(excerpt_selector).first
+                                    excerpt_text = await self.safe_get_text(excerpt_elem)
+                                    if excerpt_text.strip():
+                                        excerpt = excerpt_text.strip()
+                                        break
+                                except Exception:
+                                    continue
+
+                            if not excerpt:
+                                excerpt = await self.safe_get_text(detail)
                             break
                     except Exception:
                         pass
@@ -1381,7 +1487,11 @@ class NotebookDetailPage(BasePage):
         Returns:
             包含 answer、citations、follow_up_questions 的結果字典
         """
-        logger.info(f"正在向筆記本 {notebook_id} 提問: {question[:50]}...")
+        logger.info(
+            "正在向筆記本 %s 提問 (question_length=%d)",
+            notebook_id,
+            len(question),
+        )
 
         # 導航到筆記本
         current_url = await self.get_current_url()
@@ -1406,6 +1516,8 @@ class NotebookDetailPage(BasePage):
                 "error": "無法輸入問題",
             }
 
+        initial_ai_message_count = await self._count_ai_messages()
+
         # 提交問題
         if not await self._submit_question():
             return {
@@ -1414,7 +1526,10 @@ class NotebookDetailPage(BasePage):
             }
 
         # 等待回應
-        response = await self._wait_for_response(timeout_ms=timeout_ms)
+        response = await self._wait_for_response(
+            timeout_ms=timeout_ms,
+            initial_ai_message_count=initial_ai_message_count,
+        )
 
         if not response:
             return {
@@ -1458,7 +1573,7 @@ class NotebookDetailPage(BasePage):
 
         # 1. 嘗試直接找輸入框（有些 UI 可能直接顯示）
         input_elem = None
-        for selector in SELECTORS["title_input"]:
+        for selector in SELECTORS["notebook_title_input"]:
             try:
                 elem = self.page.locator(selector).first
                 if await elem.is_visible(timeout=1000):
@@ -1484,9 +1599,9 @@ class NotebookDetailPage(BasePage):
                 try:
                     await title_elem.click()
                     await self.page.wait_for_timeout(500)
-                    
+
                     # 再次尋找輸入框
-                    for selector in SELECTORS["title_input"]:
+                    for selector in SELECTORS["notebook_title_input"]:
                         try:
                             elem = self.page.locator(selector).first
                             if await elem.is_visible(timeout=2000):
@@ -1507,6 +1622,6 @@ class NotebookDetailPage(BasePage):
             except Exception as e:
                 logger.error(f"重新命名失敗: {e}")
                 return False
-        
+
         logger.warning("無法執行重新命名（找不到輸入框或標題）")
         return False

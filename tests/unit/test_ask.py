@@ -1,6 +1,5 @@
 """ask 工具的單元測試。"""
 
-import pytest
 
 from kof_notebooklm_mcp.tools.ask import (
     AskResult,
@@ -89,7 +88,7 @@ class TestEstimateConfidence:
 
     def test_high_confidence(self):
         """測試高信心程度。"""
-        answer = "這是一個詳細的回答" * 20  # 超過 200 字元
+        answer = "字" * 201
         citations = [
             Citation(source_id="s1", source_title="來源一"),
             Citation(source_id="s2", source_title="來源二"),
@@ -106,7 +105,7 @@ class TestEstimateConfidence:
 
     def test_medium_confidence_long_answer(self):
         """測試中等信心程度（長回答）。"""
-        answer = "這是一個較長的回答" * 10  # 超過 100 字元
+        answer = "字" * 101
         citations = []
         confidence = _estimate_confidence(answer, citations)
         assert confidence == "medium"

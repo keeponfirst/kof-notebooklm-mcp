@@ -17,16 +17,16 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from .client.browser import shutdown_browser
-from .tools.health_check import health_check
-from .tools.list_notebooks import list_notebooks
-from .tools.get_notebook import get_notebook
-from .tools.list_sources import list_sources
 from .tools.add_source import add_source
 from .tools.ask import ask
 from .tools.create_notebook import create_notebook
-from .utils.rate_limit import get_rate_limiter, RateLimitExceeded
-from .utils.circuit_breaker import get_circuit_breaker, CircuitBreakerOpen
-from .utils.errors import handle_exception, error_response, ErrorCode
+from .tools.get_notebook import get_notebook
+from .tools.health_check import health_check
+from .tools.list_notebooks import list_notebooks
+from .tools.list_sources import list_sources
+from .utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
+from .utils.errors import ErrorCode, error_response, handle_exception
+from .utils.rate_limit import RateLimitExceeded, get_rate_limiter
 
 # Configure logging
 logging.basicConfig(
@@ -38,6 +38,20 @@ logger = logging.getLogger(__name__)
 
 # Create the MCP server
 server = Server("kof-notebooklm-mcp")
+
+
+def _summarize_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """保留操作脈絡，但不把來源全文、問題或可能帶憑證的 URL 寫入日誌。"""
+    summary: dict[str, Any] = {}
+    for key, value in arguments.items():
+        if key in {"text", "question"}:
+            length = len(value) if isinstance(value, str) else None
+            summary[key] = f"<redacted: {length} chars>" if length is not None else "<redacted>"
+        elif key == "url":
+            summary[key] = "<redacted: URL>" if value else value
+        else:
+            summary[key] = value
+    return summary
 
 
 # Tool definitions
@@ -178,7 +192,7 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle tool calls with rate limiting and circuit breaker protection."""
-    logger.info("Tool called: %s with args: %s", name, arguments)
+    logger.info("Tool called: %s with args: %s", name, _summarize_tool_arguments(arguments))
 
     # 取得速率限制器和斷路器
     rate_limiter = get_rate_limiter()
@@ -285,15 +299,18 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 )
             ]
 
-        # 檢查結果是否有錯誤
-        if result_dict and "error" in result_dict:
-            # 記錄失敗（但不是所有錯誤都應觸發斷路器）
-            error_code = result_dict["error"].get("code", "")
-            if error_code in ("TIMEOUT", "NETWORK_ERROR", "INTERNAL_ERROR"):
-                await circuit_breaker.record_failure()
-        else:
-            # 記錄成功
-            await circuit_breaker.record_success()
+        # health_check 的 error 是狀態說明字串（或 None），不是標準錯誤物件，
+        # 而且健康檢查本來就不應改變一般操作共用的斷路器狀態。
+        if name != "health_check":
+            error_payload = result_dict.get("error") if result_dict else None
+            if isinstance(error_payload, dict):
+                # 記錄失敗（但不是所有錯誤都應觸發斷路器）
+                error_code = error_payload.get("code", "")
+                if error_code in ("TIMEOUT", "NETWORK_ERROR", "INTERNAL_ERROR"):
+                    await circuit_breaker.record_failure()
+            else:
+                # 記錄成功
+                await circuit_breaker.record_success()
 
         return [TextContent(type="text", text=json.dumps(result_dict))]
 

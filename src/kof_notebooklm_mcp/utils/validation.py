@@ -5,10 +5,8 @@
 """
 
 import re
-from urllib.parse import urlparse
 from dataclasses import dataclass
-from typing import Literal
-
+from urllib.parse import urlparse
 
 # 驗證限制
 MAX_QUESTION_LENGTH = 10000  # 問題最大長度
@@ -48,17 +46,6 @@ def validate_url(url: str) -> ValidationResult:
     except Exception as e:
         return ValidationResult(valid=False, error=f"URL 格式無效: {e}")
 
-    # 檢查協議
-    if parsed.scheme.lower() not in ALLOWED_URL_SCHEMES:
-        return ValidationResult(
-            valid=False,
-            error=f"不支援的 URL 協議: {parsed.scheme}。只允許 {', '.join(ALLOWED_URL_SCHEMES)}",
-        )
-
-    # 檢查主機名稱
-    if not parsed.netloc:
-        return ValidationResult(valid=False, error="URL 缺少主機名稱")
-
     # 檢查危險模式
     dangerous_patterns = [
         r"javascript:",
@@ -69,6 +56,17 @@ def validate_url(url: str) -> ValidationResult:
     for pattern in dangerous_patterns:
         if re.search(pattern, url, re.IGNORECASE):
             return ValidationResult(valid=False, error="URL 包含不安全的內容")
+
+    # 檢查協議
+    if parsed.scheme.lower() not in ALLOWED_URL_SCHEMES:
+        return ValidationResult(
+            valid=False,
+            error=f"不支援的 URL 協議: {parsed.scheme}。只允許 {', '.join(ALLOWED_URL_SCHEMES)}",
+        )
+
+    # 檢查主機名稱
+    if not parsed.netloc:
+        return ValidationResult(valid=False, error="URL 缺少主機名稱")
 
     return ValidationResult(valid=True, sanitized_value=url)
 

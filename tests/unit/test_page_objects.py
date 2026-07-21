@@ -1,9 +1,113 @@
 """頁面物件資料類別的單元測試。"""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
+from kof_notebooklm_mcp.client.pages.notebook_detail import (
+    SELECTORS,
+    NotebookDetail,
+    NotebookDetailPage,
+    SourceInfo,
+)
 from kof_notebooklm_mcp.client.pages.notebooks import NotebookInfo
-from kof_notebooklm_mcp.client.pages.notebook_detail import NotebookDetail, SourceInfo
+
+
+def test_current_notebook_title_selector_is_supported():
+    """目前 NotebookLM 的標題欄位應可直接被重新命名流程找到。"""
+    assert "input.title-input" in SELECTORS["notebook_title_input"]
+    assert "input.title-input" not in SELECTORS["title_input"]
+
+
+def test_current_source_list_selectors_are_supported():
+    """目前 NotebookLM 的來源面板、列與標題應有優先選擇器。"""
+    assert SELECTORS["sources_panel"][0] == "section.source-panel"
+    assert SELECTORS["source_items"][0] == "div.single-source-container"
+    assert SELECTORS["source_title"][0] == "div.source-title"
+
+
+def test_current_copied_text_submit_selector_precedes_global_buttons():
+    """來源對話框的插入按鈕必須先於可能被遮住的全頁按鈕。"""
+    assert SELECTORS["submit_button"][0] == 'mat-dialog-container button:has-text("插入")'
+
+
+def test_current_ai_response_and_citation_selectors_are_supported():
+    """新版 NotebookLM 的回答與引用浮層應使用目前可見的 DOM。"""
+    assert SELECTORS["ai_message"][0] == (
+        "mat-card-content.to-user-message-inner-content"
+    )
+    assert SELECTORS["citation_detail"][0] == ".citation-tooltip-panel"
+    assert SELECTORS["citation_title"][0] == ".citation-tooltip-header"
+    assert SELECTORS["citation_excerpt"][0] == ".citation-tooltip-content"
+
+
+@pytest.mark.asyncio
+async def test_extract_citations_deduplicates_repeated_markers():
+    """同一來源摘錄被多次標記時，只回傳一次，避免虛增引用數。"""
+    citation_elems = MagicMock()
+    citation_elems.count = AsyncMock(return_value=2)
+    citation_elems.nth.side_effect = [MagicMock(), MagicMock()]
+    message = MagicMock()
+    message.locator.return_value = citation_elems
+
+    detail = NotebookDetailPage(MagicMock())
+    repeated = {
+        "source_id": "citation_1",
+        "source_title": "研究來源",
+        "excerpt": "相同摘錄內容",
+    }
+    detail._extract_single_citation = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[repeated, repeated.copy()]
+    )
+
+    citations = await detail._extract_citations(message)
+
+    assert citations == [repeated]
+
+
+@pytest.mark.asyncio
+async def test_count_ai_messages_uses_first_nonempty_current_selector():
+    """計數應採第一個有命中的回答容器，供連續提問判斷新回覆。"""
+    page = MagicMock()
+    empty = MagicMock()
+    empty.count = AsyncMock(return_value=0)
+    current = MagicMock()
+    current.count = AsyncMock(return_value=3)
+    page.locator.side_effect = [empty, current]
+
+    detail = NotebookDetailPage(page)
+
+    assert await detail._count_ai_messages() == 3
+    assert page.locator.call_args_list[0].args[0] == SELECTORS["ai_message"][0]
+
+
+@pytest.mark.asyncio
+async def test_extract_source_id_skips_missing_link_without_waiting_for_attributes():
+    """沒有來源連結時不應對不存在的元素讀取屬性而等到逾時。"""
+    page = MagicMock()
+    item = MagicMock()
+    item.get_attribute = AsyncMock(return_value=None)
+    links = MagicMock()
+    links.count = AsyncMock(return_value=0)
+    item.locator.return_value = links
+
+    detail = NotebookDetailPage(page)
+    source_id = await detail._extract_source_id(item)
+
+    assert source_id is None
+    links.count.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_detects_current_markdown_source_as_text():
+    """新版 UI 用 markdown 圖示標示貼上文字來源。"""
+    item = MagicMock()
+    item.text_content = AsyncMock(return_value="markdown\n# 研究準則")
+    item.get_attribute = AsyncMock(return_value=None)
+
+    detail = NotebookDetailPage(MagicMock())
+
+    assert await detail._detect_source_type(item) == "text"
 
 
 class TestNotebookInfo:

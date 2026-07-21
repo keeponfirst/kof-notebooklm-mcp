@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from ..client.browser import get_browser_manager
 from ..client.pages.notebook_detail import NotebookDetailPage
-from ..utils.validation import validate_notebook_id, validate_text_content, MAX_QUESTION_LENGTH
+from ..utils.validation import MAX_QUESTION_LENGTH, validate_notebook_id, validate_text_content
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,9 @@ class AskResult:
         return result
 
 
-def _estimate_confidence(answer: str, citations: list[Citation]) -> Literal["high", "medium", "low"] | None:
+def _estimate_confidence(
+    answer: str, citations: list[Citation]
+) -> Literal["high", "medium", "low"] | None:
     """
     根據回答內容和引用數量估計信心程度。
 
@@ -109,7 +111,11 @@ async def ask(
     Returns:
         AskResult 包含回答、引用和建議問題
     """
-    logger.info(f"執行 ask (notebook_id={notebook_id}, question={question[:50]}...)")
+    logger.info(
+        "執行 ask (notebook_id=%s, question_length=%d)",
+        notebook_id,
+        len(question),
+    )
 
     # 驗證筆記本 ID
     id_validation = validate_notebook_id(notebook_id)
