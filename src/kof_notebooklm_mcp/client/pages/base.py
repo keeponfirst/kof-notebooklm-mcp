@@ -5,9 +5,8 @@
 """
 
 import logging
-from typing import Any
 
-from playwright.async_api import Page, Locator
+from playwright.async_api import Locator, Page
 
 from ...config import Config, get_config
 
@@ -57,24 +56,32 @@ class BasePage:
         for selector in selectors:
             try:
                 locator = self.page.locator(selector)
-                await locator.wait_for(timeout=min(timeout // len(selectors), 5000), state="visible")
+                await locator.wait_for(
+                    timeout=min(timeout // len(selectors), 5000),
+                    state="visible",
+                )
                 return locator
             except Exception:
                 continue
 
         return None
 
-    async def safe_get_text(self, locator: Locator) -> str:
+    async def safe_get_text(self, locator: Locator, timeout_ms: int = 1000) -> str:
         """安全地取得元素文字，失敗時回傳空字串。"""
         try:
-            return (await locator.text_content()) or ""
+            return (await locator.text_content(timeout=timeout_ms)) or ""
         except Exception:
             return ""
 
-    async def safe_get_attribute(self, locator: Locator, attr: str) -> str | None:
+    async def safe_get_attribute(
+        self,
+        locator: Locator,
+        attr: str,
+        timeout_ms: int = 1000,
+    ) -> str | None:
         """安全地取得元素屬性。"""
         try:
-            return await locator.get_attribute(attr)
+            return await locator.get_attribute(attr, timeout=timeout_ms)
         except Exception:
             return None
 

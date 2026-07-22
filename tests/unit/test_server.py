@@ -69,3 +69,27 @@ async def test_health_check_status_error_is_not_treated_as_error_object(
     assert payload == result.to_dict()
     circuit_breaker.record_failure.assert_not_awaited()
     circuit_breaker.record_success.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_health_check_accepts_missing_arguments(monkeypatch):
+    """無參數工具被 MCP runtime 以 None 呼叫時也不應觸發 NoneType 錯誤。"""
+    result = HealthCheckResult(
+        status="healthy",
+        authenticated=True,
+        latency_ms=25,
+        browser_ok=True,
+        error=None,
+    )
+    circuit_breaker = AsyncMock()
+
+    monkeypatch.setattr(server_module, "health_check", AsyncMock(return_value=result))
+    monkeypatch.setattr(
+        server_module,
+        "get_circuit_breaker",
+        lambda _name: circuit_breaker,
+    )
+
+    response = await server_module.call_tool("health_check", None)
+
+    assert json.loads(response[0].text) == result.to_dict()

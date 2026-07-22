@@ -174,20 +174,31 @@ async def ask(
             error_msg = result.get("error", "提問失敗")
 
             # 判斷錯誤類型
-            error_code = "ASK_FAILED"
-            if "來源" in error_msg or "source" in error_msg.lower():
+            error_code = result.get("error_code", "ASK_FAILED")
+            if error_code == "ASK_FAILED" and (
+                "來源" in error_msg or "source" in error_msg.lower()
+            ):
                 error_code = "NO_SOURCES"
-            elif "逾時" in error_msg or "timeout" in error_msg.lower():
+            elif error_code == "ASK_FAILED" and (
+                "逾時" in error_msg or "timeout" in error_msg.lower()
+            ):
                 error_code = "TIMEOUT"
-            elif "輸入框" in error_msg or "input" in error_msg.lower():
+            elif error_code == "ASK_FAILED" and (
+                "輸入框" in error_msg or "input" in error_msg.lower()
+            ):
                 error_code = "CHAT_UNAVAILABLE"
 
+            error: dict[str, Any] = {
+                "code": error_code,
+                "message": error_msg,
+                "recoverable": error_code
+                in {"TIMEOUT", "ANSWER_EXTRACTION_FAILED", "CHAT_UNAVAILABLE"},
+            }
+            if result.get("details"):
+                error["details"] = result["details"]
+
             return AskResult(
-                error={
-                    "code": error_code,
-                    "message": error_msg,
-                    "recoverable": error_code == "TIMEOUT",
-                }
+                error=error
             )
 
         # 提取回答

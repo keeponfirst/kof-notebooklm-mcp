@@ -17,6 +17,57 @@ from .base import BasePage
 logger = logging.getLogger(__name__)
 
 
+class NotebookPageExtractionError(RuntimeError):
+    """NotebookLM 詳細頁尚未就緒，或目前 DOM 無法可靠解析。"""
+
+
+class SourceExtractionError(NotebookPageExtractionError):
+    """來源面板無法可靠解析。"""
+
+
+_ANSWER_UI_CONTROL_MARKERS = (
+    "跳到最底部",
+    "按一下即可開啟引用內容詳細資料",
+    "答得好",
+    "有待加強",
+    "jump to the bottom",
+    "click to open citation details",
+    "good response",
+    "needs improvement",
+)
+
+_ANSWER_UI_FEATURE_MARKERS = (
+    "ai 簡報",
+    "ai 學習卡",
+    "ai 互動式測驗",
+    "ai 資訊圖表",
+    "ai podcast",
+    "ai 心智圖",
+    "audio overview",
+    "video overview",
+    "study guide",
+    "flashcards",
+    "infographic",
+)
+
+
+def detect_answer_ui_pollution(text: str) -> list[str]:
+    """辨識誤把 NotebookLM 工作區介面當成回答正文的情況。"""
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    if not normalized:
+        return []
+
+    control_hits = [marker for marker in _ANSWER_UI_CONTROL_MARKERS if marker in normalized]
+    feature_hits = [marker for marker in _ANSWER_UI_FEATURE_MARKERS if marker in normalized]
+    source_generation_count = normalized.count("根據來源") + normalized.count(
+        "based on your sources"
+    )
+
+    if len(control_hits) >= 2 or len(feature_hits) >= 4 or source_generation_count >= 4:
+        return [*control_hits, *feature_hits]
+    return []
+
+
 # NotebookLM 筆記本詳細頁面選擇器
 SELECTORS = {
     # 筆記本標題
@@ -192,16 +243,14 @@ SELECTORS = {
     ],
     # AI 回應容器 (備用)
     "response_container": [
-        '.chat-message-pair',  # 當前 UI
+        '.chat-message-pair:has(.to-user-message-inner-content)',  # 當前 UI
         '[data-testid="ai-response"]',
-        '[class*="response"]',
     ],
     # 回應文字內容
     "response_text": [
         '.message-text-content',  # 當前 UI
         '[data-testid="response-text"]',
-        '[class*="response"] [class*="text"]',
-        '[class*="markdown"]',
+        '.to-user-message-inner-content [class*="markdown"]',
     ],
     # 回應中的引用/來源參考
     "citation": [
@@ -237,12 +286,9 @@ SELECTORS = {
     # 正在輸入/思考指示器
     "typing_indicator": [
         '[data-testid="typing-indicator"]',
-        '*:has-text("Interpreting")',
-        '*:has-text("Thinking")',
-        '[class*="typing"]',
-        '[class*="thinking"]',
-        '[class*="generating"]',
-        '[class*="loading"]',
+        '.typing-indicator',
+        '.thinking-indicator',
+        '.generating-indicator',
         '[aria-label*="typing"]',
         '[aria-label*="thinking"]',
     ],
@@ -272,13 +318,9 @@ SELECTORS = {
     "ai_message": [
         'mat-card-content.to-user-message-inner-content',  # 當前 UI
         '.to-user-message-inner-content',
-        '.to-user-container',
-        'chat-message:not(:has(.from-user-container))',
+        'chat-message:has(.to-user-message-card-content) '
+        'mat-card-content.message-content',
         '[data-testid="ai-message"]',
-        '[class*="message"][class*="assistant"]',
-        '[class*="message"][class*="ai"]',
-        '[class*="message"][class*="bot"]',
-        '[class*="assistant"][class*="chat"]',
     ],
     # 建議問題
     "suggested_questions": [
@@ -361,7 +403,29 @@ class NotebookDetailPage(BasePage):
         url = f"{self.base_url}/notebook/{notebook_id}"
         await self.navigate(url)
         self._current_notebook_id = notebook_id
-        await self.page.wait_for_timeout(2000)  # 等待頁面穩定
+        await self._wait_for_notebook_ready()
+
+    async def _wait_for_notebook_ready(self, timeout_ms: int = 15000) -> None:
+        """等待詳細頁的核心 UI 出現，避免把載入中頁面判成空筆記本。"""
+        ready_selector = ", ".join(
+            [
+                SELECTORS["notebook_title_input"][0],
+                SELECTORS["sources_panel"][0],
+                SELECTORS["chat_textarea"][0],
+            ]
+        )
+        try:
+            await self.page.locator(ready_selector).first.wait_for(
+                state="visible",
+                timeout=timeout_ms,
+            )
+        except Exception as exc:
+            raise NotebookPageExtractionError(
+                "NotebookLM 詳細頁在時限內未完成載入"
+            ) from exc
+
+        # 核心容器出現後，Angular 仍可能正在填入標題與來源列。
+        await self.page.wait_for_timeout(750)
 
     async def _get_notebook_title(self) -> str:
         """取得筆記本標題。"""
@@ -384,7 +448,7 @@ class NotebookDetailPage(BasePage):
             except Exception:
                 continue
 
-        return "未命名筆記本"
+        raise NotebookPageExtractionError("無法可靠提取筆記本標題")
 
     async def _find_sources_panel(self) -> Locator | None:
         """尋找來源面板。"""
@@ -402,11 +466,12 @@ class NotebookDetailPage(BasePage):
         """尋找所有來源項目。"""
         # 先嘗試找來源面板
         panel = await self._find_sources_panel()
-        search_context = panel if panel else self.page
+        if panel is None:
+            raise SourceExtractionError("找不到來源面板，無法確認來源數量")
 
         for selector in SELECTORS["source_items"]:
             try:
-                items = search_context.locator(selector)
+                items = panel.locator(selector)
                 count = await items.count()
                 if count > 0:
                     logger.debug(f"使用選擇器 '{selector}' 找到 {count} 個來源項目")
@@ -531,6 +596,8 @@ class NotebookDetailPage(BasePage):
         current_url = await self.get_current_url()
         if notebook_id not in current_url:
             await self.navigate_to_notebook(notebook_id)
+        else:
+            await self._wait_for_notebook_ready()
 
         # 取得標題
         name = await self._get_notebook_title()
@@ -566,6 +633,8 @@ class NotebookDetailPage(BasePage):
         current_url = await self.get_current_url()
         if notebook_id not in current_url:
             await self.navigate_to_notebook(notebook_id)
+        else:
+            await self._wait_for_notebook_ready()
 
         # 尋找來源項目
         items = await self._find_source_items()
@@ -1132,21 +1201,75 @@ class NotebookDetailPage(BasePage):
                 continue
         return 0
 
-    async def _get_latest_ai_answer_text(self) -> str:
-        """取得目前最後一則 AI 回覆文字，供串流完成判斷。"""
+    async def _get_latest_ai_candidate(
+        self,
+    ) -> tuple[Locator | None, str, dict[str, Any]]:
+        """取得最新且通過介面污染檢查的 AI 回答候選。"""
+        rejected_candidates = 0
+        pollution_markers: set[str] = set()
+        selectors_checked = 0
+
         for selector in SELECTORS["ai_message"]:
+            selectors_checked += 1
             try:
                 messages = self.page.locator(selector)
-                if await messages.count() > 0:
-                    return await self._extract_answer_text(messages.last)
+                count = await messages.count()
+                if count == 0:
+                    continue
+
+                message = messages.last
+                text = await self._extract_answer_text(message)
+                if not text:
+                    rejected_candidates += 1
+                    continue
+
+                pollution = detect_answer_ui_pollution(text)
+                if pollution:
+                    rejected_candidates += 1
+                    pollution_markers.update(pollution)
+                    logger.warning(
+                        "拒絕疑似 NotebookLM 介面文字的回答候選 "
+                        "(selector=%s, text_length=%d, marker_count=%d)",
+                        selector,
+                        len(text),
+                        len(pollution),
+                    )
+                    continue
+
+                return message, text, {
+                    "selector": selector,
+                    "selectors_checked": selectors_checked,
+                    "rejected_candidates": rejected_candidates,
+                }
             except Exception:
                 continue
-        return ""
+
+        return None, "", {
+            "selectors_checked": selectors_checked,
+            "rejected_candidates": rejected_candidates,
+            "pollution_marker_count": len(pollution_markers),
+        }
+
+    async def _get_latest_ai_answer_text(self) -> str:
+        """取得目前最後一則 AI 回覆文字，供串流完成判斷。"""
+        _, text, _ = await self._get_latest_ai_candidate()
+        return text
+
+    async def _is_response_in_progress(self) -> bool:
+        """檢查精確的生成中指示器，避免廣域 loading class 誤判整頁。"""
+        for selector in [*SELECTORS["typing_indicator"], *SELECTORS["stop_button"]]:
+            try:
+                if await self.page.locator(selector).first.is_visible(timeout=300):
+                    return True
+            except Exception:
+                continue
+        return False
 
     async def _wait_for_response(
         self,
         timeout_ms: int = 90000,
         initial_ai_message_count: int = 0,
+        initial_answer_text: str = "",
     ) -> dict[str, Any] | None:
         """
         等待 AI 回應完成。
@@ -1154,6 +1277,7 @@ class NotebookDetailPage(BasePage):
         Args:
             timeout_ms: 逾時時間（毫秒）
             initial_ai_message_count: 送出問題前已有的 AI 回覆數量
+            initial_answer_text: 送出問題前最後一則有效 AI 回覆
 
         Returns:
             回應資訊字典，包含 answer 和 citations
@@ -1165,22 +1289,20 @@ class NotebookDetailPage(BasePage):
         # 首先等待回應開始（出現 typing indicator 或新訊息）
         response_started = False
         while not response_started:
-            # 檢查是否有 typing indicator
-            for selector in SELECTORS["typing_indicator"]:
-                try:
-                    indicator = self.page.locator(selector).first
-                    if await indicator.is_visible(timeout=1000):
-                        response_started = True
-                        logger.debug("偵測到 AI 正在回應")
-                        break
-                except Exception:
-                    pass
+            if await self._is_response_in_progress():
+                response_started = True
+                logger.debug("偵測到 AI 正在回應")
 
             # 檢查是否有新的 AI 訊息。不能只判斷「有訊息」，否則第二次提問
             # 會立刻把上一則回答誤當成這次的結果。
             if await self._count_ai_messages() > initial_ai_message_count:
                 response_started = True
                 logger.debug("偵測到新的 AI 訊息")
+
+            latest_answer_text = await self._get_latest_ai_answer_text()
+            if latest_answer_text and latest_answer_text != initial_answer_text:
+                response_started = True
+                logger.debug("偵測到 AI 回應內容變更")
 
             # 檢查逾時
             current_time = await self.page.evaluate("Date.now()")
@@ -1195,40 +1317,21 @@ class NotebookDetailPage(BasePage):
 
         last_answer_text = ""
         stable_answer_checks = 0
+        stable_invalid_checks = 0
 
         while True:
-            # 檢查 typing indicator 是否消失
-            is_typing = False
-            for selector in SELECTORS["typing_indicator"]:
-                try:
-                    indicator = self.page.locator(selector).first
-                    if await indicator.is_visible(timeout=500):
-                        is_typing = True
-                        break
-                except Exception:
-                    pass
+            is_typing = await self._is_response_in_progress()
 
             if not is_typing:
-                # 等待一下確保回應真的完成
-                await self.page.wait_for_timeout(1000)
-
-                # 再次檢查
-                still_typing = False
-                for selector in SELECTORS["typing_indicator"]:
-                    try:
-                        indicator = self.page.locator(selector).first
-                        if await indicator.is_visible(timeout=500):
-                            still_typing = True
-                            break
-                    except Exception:
-                        pass
-
                 has_new_message = await self._count_ai_messages() > initial_ai_message_count
-                current_answer_text = (
-                    await self._get_latest_ai_answer_text() if has_new_message else ""
+                _, current_answer_text, diagnostics = (
+                    await self._get_latest_ai_candidate()
+                )
+                has_changed_answer = bool(
+                    current_answer_text and current_answer_text != initial_answer_text
                 )
 
-                if current_answer_text and current_answer_text == last_answer_text:
+                if has_changed_answer and current_answer_text == last_answer_text:
                     stable_answer_checks += 1
                 else:
                     stable_answer_checks = 0
@@ -1236,20 +1339,31 @@ class NotebookDetailPage(BasePage):
 
                 # 新版 UI 可能沒有可辨識的 typing indicator，因此除了訊息數量，
                 # 還要求回答文字連續三次（約三秒）不再變動，避免截到串流中的半成品。
-                if not still_typing and has_new_message and stable_answer_checks >= 3:
+                if has_changed_answer and stable_answer_checks >= 3:
                     logger.info("AI 回應完成")
-                    break
+                    return await self._extract_response()
+
+                # 新訊息已穩定出現，但所有候選都無效時，不再等滿 90 秒才回報。
+                if has_new_message and not current_answer_text:
+                    stable_invalid_checks += 1
+                    if stable_invalid_checks >= 3:
+                        logger.warning(
+                            "新 AI 訊息無法可靠解析 (diagnostics=%s)", diagnostics
+                        )
+                        return await self._extract_response()
+                else:
+                    stable_invalid_checks = 0
 
             # 檢查逾時
             current_time = await self.page.evaluate("Date.now()")
             if current_time - start_time > timeout_ms:
                 logger.warning("等待回應完成逾時")
-                break
+                return {
+                    "error_code": "TIMEOUT",
+                    "error": "等待 AI 回應完成逾時",
+                }
 
             await self.page.wait_for_timeout(1000)
-
-        # 提取回應內容
-        return await self._extract_response()
 
     async def _extract_response(self) -> dict[str, Any]:
         """
@@ -1260,40 +1374,20 @@ class NotebookDetailPage(BasePage):
         """
         logger.info("正在提取 AI 回應內容...")
 
-        answer = ""
-        citations: list[dict[str, Any]] = []
         follow_up_questions: list[str] = []
+        ai_message, answer, diagnostics = await self._get_latest_ai_candidate()
 
-        # 嘗試找到最新的 AI 訊息
-        ai_message = None
-        for selector in SELECTORS["ai_message"]:
-            try:
-                messages = self.page.locator(selector)
-                count = await messages.count()
-                if count > 0:
-                    ai_message = messages.last
-                    logger.debug(f"找到 {count} 個 AI 訊息，使用最後一個")
-                    break
-            except Exception:
-                continue
+        if ai_message is None or not answer:
+            return {
+                "answer": "",
+                "citations": [],
+                "follow_up_questions": [],
+                "error_code": "ANSWER_EXTRACTION_FAILED",
+                "error": "NotebookLM 已產生回應，但無法可靠定位回答正文",
+                "details": diagnostics,
+            }
 
-        # 備用：嘗試找回應容器
-        if not ai_message:
-            for selector in SELECTORS["response_container"]:
-                try:
-                    container = self.page.locator(selector).last
-                    if await container.is_visible(timeout=2000):
-                        ai_message = container
-                        break
-                except Exception:
-                    continue
-
-        if ai_message:
-            # 提取回應文字
-            answer = await self._extract_answer_text(ai_message)
-
-            # 提取引用
-            citations = await self._extract_citations(ai_message)
+        citations = await self._extract_citations(ai_message)
 
         # 提取建議問題
         follow_up_questions = await self._extract_suggested_questions()
@@ -1317,7 +1411,7 @@ class NotebookDetailPage(BasePage):
         # 嘗試從特定的文字容器提取
         for selector in SELECTORS["response_text"]:
             try:
-                text_elem = message_elem.locator(selector).first
+                text_elem = message_elem.locator(selector).last
                 text = await self.safe_get_text(text_elem)
                 if text.strip():
                     logger.debug(f"從 {selector} 提取到回應文字")
@@ -1497,9 +1591,8 @@ class NotebookDetailPage(BasePage):
         current_url = await self.get_current_url()
         if notebook_id not in current_url:
             await self.navigate_to_notebook(notebook_id)
-
-        # 等待頁面穩定
-        await self.page.wait_for_timeout(2000)
+        else:
+            await self._wait_for_notebook_ready()
 
         # 檢查聊天功能是否可用
         chat_input = await self._find_chat_input()
@@ -1517,6 +1610,7 @@ class NotebookDetailPage(BasePage):
             }
 
         initial_ai_message_count = await self._count_ai_messages()
+        initial_answer_text = await self._get_latest_ai_answer_text()
 
         # 提交問題
         if not await self._submit_question():
@@ -1529,12 +1623,22 @@ class NotebookDetailPage(BasePage):
         response = await self._wait_for_response(
             timeout_ms=timeout_ms,
             initial_ai_message_count=initial_ai_message_count,
+            initial_answer_text=initial_answer_text,
         )
 
         if not response:
             return {
                 "success": False,
+                "error_code": "TIMEOUT",
                 "error": "等待 AI 回應逾時",
+            }
+
+        if response.get("error_code"):
+            return {
+                "success": False,
+                "error_code": response["error_code"],
+                "error": response.get("error", "無法取得 AI 回應"),
+                "details": response.get("details", {}),
             }
 
         # 處理結果
@@ -1542,6 +1646,7 @@ class NotebookDetailPage(BasePage):
         if not answer:
             return {
                 "success": False,
+                "error_code": "ANSWER_EXTRACTION_FAILED",
                 "error": "無法提取 AI 回應內容",
             }
 

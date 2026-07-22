@@ -9,7 +9,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..client.browser import get_browser_manager
-from ..client.pages.notebook_detail import NotebookDetailPage, SourceInfo
+from ..client.pages.notebook_detail import (
+    NotebookDetailPage,
+    SourceExtractionError,
+    SourceInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,18 @@ async def list_sources(notebook_id: str) -> ListSourcesResult:
         return ListSourcesResult(
             sources=sources,
             total=len(sources),
+        )
+
+    except SourceExtractionError as e:
+        logger.warning("list_sources 無法解析來源面板: %s", e)
+        return ListSourcesResult(
+            sources=[],
+            total=0,
+            error={
+                "code": "SOURCE_EXTRACTION_FAILED",
+                "message": str(e),
+                "recoverable": True,
+            },
         )
 
     except Exception as e:

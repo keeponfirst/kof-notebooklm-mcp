@@ -9,7 +9,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..client.browser import get_browser_manager
-from ..client.pages.notebook_detail import NotebookDetailPage, NotebookDetail
+from ..client.pages.notebook_detail import (
+    NotebookDetail,
+    NotebookDetailPage,
+    NotebookPageExtractionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,16 @@ async def get_notebook(notebook_id: str) -> GetNotebookResult:
         logger.info(f"成功取得筆記本: {notebook.name}")
 
         return GetNotebookResult(notebook=notebook)
+
+    except NotebookPageExtractionError as e:
+        logger.warning("get_notebook 無法解析詳細頁: %s", e)
+        return GetNotebookResult(
+            error={
+                "code": "NOTEBOOK_EXTRACTION_FAILED",
+                "message": str(e),
+                "recoverable": True,
+            }
+        )
 
     except Exception as e:
         logger.exception("get_notebook 執行失敗")

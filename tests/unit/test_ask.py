@@ -1,11 +1,17 @@
 """ask 工具的單元測試。"""
 
+from importlib import import_module
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from kof_notebooklm_mcp.tools.ask import (
     AskResult,
     Citation,
     _estimate_confidence,
 )
+
+ask_module = import_module("kof_notebooklm_mcp.tools.ask")
 
 
 class TestCitation:
@@ -121,3 +127,33 @@ class TestEstimateConfidence:
         """測試無回答時。"""
         confidence = _estimate_confidence("", [])
         assert confidence is None
+
+
+@pytest.mark.asyncio
+async def test_ask_preserves_answer_extraction_error(monkeypatch):
+    """頁面層的正文解析錯誤應原樣傳給 MCP 呼叫端。"""
+    page = MagicMock()
+    browser = MagicMock()
+    browser.get_page = AsyncMock(return_value=page)
+    detail = MagicMock()
+    detail.ask = AsyncMock(
+        return_value={
+            "success": False,
+            "error_code": "ANSWER_EXTRACTION_FAILED",
+            "error": "無法可靠定位回答正文",
+            "details": {"rejected_candidates": 2},
+        }
+    )
+
+    monkeypatch.setattr(ask_module, "get_browser_manager", lambda: browser)
+    monkeypatch.setattr(ask_module, "NotebookDetailPage", lambda _page: detail)
+
+    result = await ask_module.ask(
+        notebook_id="00000000-0000-4000-8000-000000000001",
+        question="請找出一個值得研究的觀點",
+    )
+
+    assert result.error is not None
+    assert result.error["code"] == "ANSWER_EXTRACTION_FAILED"
+    assert result.error["recoverable"] is True
+    assert result.error["details"] == {"rejected_candidates": 2}

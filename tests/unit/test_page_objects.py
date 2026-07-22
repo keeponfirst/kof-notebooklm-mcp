@@ -8,7 +8,9 @@ from kof_notebooklm_mcp.client.pages.notebook_detail import (
     SELECTORS,
     NotebookDetail,
     NotebookDetailPage,
+    SourceExtractionError,
     SourceInfo,
+    detect_answer_ui_pollution,
 )
 from kof_notebooklm_mcp.client.pages.notebooks import NotebookInfo
 
@@ -79,6 +81,88 @@ async def test_count_ai_messages_uses_first_nonempty_current_selector():
 
     assert await detail._count_ai_messages() == 3
     assert page.locator.call_args_list[0].args[0] == SELECTORS["ai_message"][0]
+
+
+def test_answer_ui_pollution_rejects_captured_workspace_chrome():
+    """工作區功能與評分按鈕文字不可被當成 AI 回答。"""
+    text = (
+        "系統現在會儲存所有工作階段的對話記錄，可在這裡刪除跳到最底部"
+        "根據來源生成 AI 簡報根據來源內容生成 AI 學習卡"
+        "根據來源內容生成 AI 互動式測驗根據來源內容生成 AI 資訊圖表"
+        "根據來源內容生成 AI Podcast根據來源內容生成 AI 心智圖"
+        "按一下即可開啟引用內容詳細資料複製答得好有待加強"
+    )
+
+    assert detect_answer_ui_pollution(text)
+
+
+def test_answer_ui_pollution_allows_normal_notebooklm_discussion():
+    """正常文章即使提到少數 NotebookLM 功能，也不應被誤殺。"""
+    text = (
+        "NotebookLM 的 AI 簡報適合快速建立共同脈絡，但不能取代來源驗證。"
+        "若要保留成組織知識，仍需記錄主張、證據、適用邊界與反例。"
+    )
+
+    assert detect_answer_ui_pollution(text) == []
+
+
+@pytest.mark.asyncio
+async def test_latest_ai_candidate_skips_polluted_selector():
+    """第一個 selector 若誤抓介面，應繼續嘗試下一個精確候選。"""
+    page = MagicMock()
+    polluted_messages = MagicMock()
+    polluted_messages.count = AsyncMock(return_value=1)
+    polluted_messages.last = MagicMock()
+    valid_messages = MagicMock()
+    valid_messages.count = AsyncMock(return_value=1)
+    valid_messages.last = MagicMock()
+    page.locator.side_effect = [polluted_messages, valid_messages]
+
+    detail = NotebookDetailPage(page)
+    detail._extract_answer_text = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            "跳到最底部按一下即可開啟引用內容詳細資料答得好有待加強",
+            "這是一段有根據、可被進一步研究的有效回答。",
+        ]
+    )
+
+    message, answer, diagnostics = await detail._get_latest_ai_candidate()
+
+    assert message is valid_messages.last
+    assert answer == "這是一段有根據、可被進一步研究的有效回答。"
+    assert diagnostics["selector"] == SELECTORS["ai_message"][1]
+    assert diagnostics["rejected_candidates"] == 1
+
+
+@pytest.mark.asyncio
+async def test_extract_response_fails_closed_for_polluted_candidates():
+    """所有候選都像介面文字時，應回傳明確錯誤而非假成功。"""
+    page = MagicMock()
+    messages = MagicMock()
+    messages.count = AsyncMock(return_value=1)
+    messages.last = MagicMock()
+    page.locator.return_value = messages
+
+    detail = NotebookDetailPage(page)
+    detail._extract_answer_text = AsyncMock(  # type: ignore[method-assign]
+        return_value="跳到最底部按一下即可開啟引用內容詳細資料答得好有待加強"
+    )
+
+    response = await detail._extract_response()
+
+    assert response["answer"] == ""
+    assert response["error_code"] == "ANSWER_EXTRACTION_FAILED"
+    assert response["details"]["pollution_marker_count"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_missing_source_panel_is_not_reported_as_empty_notebook():
+    """找不到來源面板代表解析失敗，不代表筆記本真的有零個來源。"""
+    detail = NotebookDetailPage(MagicMock())
+    detail._find_sources_panel = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    with pytest.raises(SourceExtractionError):
+        await detail._find_source_items()
 
 
 @pytest.mark.asyncio

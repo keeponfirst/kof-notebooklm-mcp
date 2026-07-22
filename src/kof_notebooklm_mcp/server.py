@@ -40,10 +40,10 @@ logger = logging.getLogger(__name__)
 server = Server("kof-notebooklm-mcp")
 
 
-def _summarize_tool_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+def _summarize_tool_arguments(arguments: dict[str, Any] | None) -> dict[str, Any]:
     """保留操作脈絡，但不把來源全文、問題或可能帶憑證的 URL 寫入日誌。"""
     summary: dict[str, Any] = {}
-    for key, value in arguments.items():
+    for key, value in (arguments or {}).items():
         if key in {"text", "question"}:
             length = len(value) if isinstance(value, str) else None
             summary[key] = f"<redacted: {length} chars>" if length is not None else "<redacted>"
@@ -190,8 +190,12 @@ async def list_tools() -> list[Tool]:
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+async def call_tool(
+    name: str,
+    arguments: dict[str, Any] | None,
+) -> list[TextContent]:
     """Handle tool calls with rate limiting and circuit breaker protection."""
+    arguments = arguments or {}
     logger.info("Tool called: %s with args: %s", name, _summarize_tool_arguments(arguments))
 
     # 取得速率限制器和斷路器
