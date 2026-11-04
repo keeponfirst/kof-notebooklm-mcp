@@ -64,7 +64,15 @@ def detect_answer_ui_pollution(text: str) -> list[str]:
     )
 
     if len(control_hits) >= 2 or len(feature_hits) >= 4 or source_generation_count >= 4:
-        return [*control_hits, *feature_hits]
+        markers = [*control_hits, *feature_hits]
+        # 只有來源生成句達門檻時，清單也不可為空，否則呼叫端會當成乾淨回答。
+        if source_generation_count >= 4:
+            markers.extend(
+                marker
+                for marker in ("根據來源", "based on your sources")
+                if marker in normalized
+            )
+        return markers
     return []
 
 

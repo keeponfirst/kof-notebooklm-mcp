@@ -106,6 +106,36 @@ def test_answer_ui_pollution_allows_normal_notebooklm_discussion():
     assert detect_answer_ui_pollution(text) == []
 
 
+def test_answer_ui_pollution_rejects_source_generation_menu_alone():
+    """只有「根據來源」選單重複達門檻時，也必須判為污染，不可回傳空清單。"""
+    text = (
+        "根據來源生成摘要。根據來源生成大綱。"
+        "根據來源生成時間軸。根據來源生成常見問題。"
+    )
+
+    assert detect_answer_ui_pollution(text)
+
+
+def test_answer_ui_pollution_rejects_english_source_generation_menu_alone():
+    """英文介面的 based on your sources 重複達門檻時，同樣判為污染。"""
+    text = (
+        "Create a summary based on your sources. Create an outline based on your sources. "
+        "Create a timeline based on your sources. Create FAQs based on your sources."
+    )
+
+    assert detect_answer_ui_pollution(text)
+
+
+def test_answer_ui_pollution_allows_answer_citing_sources_below_threshold():
+    """正常回答提到「根據來源」少於門檻，三條規則都不成立，不判污染。"""
+    text = (
+        "根據來源一，主張 A 有兩份實驗支持。根據來源二，反例出現在小樣本。"
+        "根據來源三，適用邊界是資料量大於一千筆。"
+    )
+
+    assert detect_answer_ui_pollution(text) == []
+
+
 @pytest.mark.asyncio
 async def test_latest_ai_candidate_skips_polluted_selector():
     """第一個 selector 若誤抓介面，應繼續嘗試下一個精確候選。"""

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Treat repeated "根據來源" / "based on your sources" menu text as answer pollution even when no other marker matches. Previously this rule returned an empty marker list, so the caller accepted the text as a clean answer.
+
 ## 0.1.3 - 2026-07-22
 
 ### Fixed
